@@ -1,0 +1,126 @@
+!@ encoding
+
+model "zainocover1"
+    uses "mmxprs", "mmsystem"
+
+    setparam("XPRS_CUTSTRATEGY", 0)
+    setparam("XPRS_HEURSTRATEGY", 0)
+    setparam("XPRS_PRESOLVE", 0)
+
+    forward procedure solvePrint(Lin: boolean)
+    forward function minUno(v: real) : boolean
+
+    declarations
+        n_ITEMS = 7
+        ITEMS = 1..n_ITEMS
+        VALUE: array(ITEMS) of real
+        WEIGHT: array(ITEMS) of real
+        take: array(ITEMS) of mpvar
+        WTMAX = 19
+    end-declarations
+
+    VALUE ::  [ 7, 9, 5, 3, 4, 5, 1]
+    WEIGHT :: [11, 6, 6, 5, 5, 4, 1]
+
+    forall(i in ITEMS)
+        take(i) is_binary                           ! binary variables
+    sum(i in ITEMS)
+        take(i) * WEIGHT(i) <= WTMAX                ! weight limit
+
+    MaxVal := sum(i in ITEMS) take(i) * VALUE(i)    ! maximize value
+
+    ! Standard branch and bound algorithm
+    ! maximize(MaxVal)
+    ! writeln("MaxVal = ", getobjval)
+
+    ! Implementing branch and cut
+    declarations
+        MyEps = 1e-6                            ! tolerance for cuts
+        xStar: array(ITEMS) of real             ! best solution found
+        z: array(ITEMS) of mpvar
+        Iter: integer                           ! number of iterations
+        CoverSize: real                         ! size of the cover
+        MyKnapsackBound: real                   ! bound on the knapsack
+        xStarBound: array(ITEMS) of linctr      ! set to 0 the z which have x = 0
+        CutList: array(range) of linctr         ! list of cuts to be added
+    end-declarations
+
+    forall(i in ITEMS)
+        z(i) is_binary                              ! binary variables
+
+    Iter := 0
+    while(true) do
+        writeln
+        Iter += 1; writeln("-"*60, " Iteration ", Iter)
+
+        solvePrint(true)
+        MyKnapsackBound := getobjval            ! get the bound on the knapsack
+
+        forall(i in ITEMS)
+            xStar(i) := getsol(take(i))         ! get the best solution found
+
+        forall(i in ITEMS)
+            if xStar(i) = 0 then
+                xStarBound(i) := z(i) = 0
+            else
+                xStarBound(i) := 0
+            end-if
+
+        MinVal := sum(i in ITEMS) z(i) * (1-xStar(i))    ! separation problem objective function
+        sum(i in ITEMS) z(i) * WEIGHT(i) >= WTMAX+1      ! cover constraint
+        minimize(MinVal)                                 ! minimize the weight of the excess
+
+        if minUno(getobjval) then
+            ! adding the new cut over the take(i) variables
+            writeln; writeln("Violation!")
+
+            CoverSize := sum(i in ITEMS) getsol(z(i))    ! size of the cover counting the z(i) binary variables
+            write("CoverSize = ", CoverSize, "\t")
+            write("[ ")
+            forall(i in ITEMS | getsol(z(i))=1)
+                write(i, " ")
+            writeln("]")
+
+            HeaviestInCover := 0.0
+            forall(i in ITEMS | getsol(z(i))=1)
+                if HeaviestInCover < WEIGHT(i) then
+                    HeaviestInCover := WEIGHT(i)
+                end-if
+
+            CutList(Iter) := sum(i in ITEMS | getsol(z(i))=1 or (WEIGHT(i) > HeaviestInCover)) take(i) <= CoverSize-1
+
+        else
+            ! no new cut found, exit
+            writeln
+            writeln("-"*60, " No new cut found, exit")
+            writeln("BestBound = ", MyKnapsackBound)
+
+            break
+
+        end-if
+
+    end-do
+
+    writeln
+    writeln("Solving the integer problem...")
+    solvePrint(false)
+
+
+    procedure solvePrint(Lin:boolean)
+        if Lin then
+            maximize(XPRS_LIN, MaxVal)
+        else
+            maximize(MaxVal)
+        end-if
+
+        writeln("MaxVal = ", getobjval)
+        writeln
+        forall(i in ITEMS)
+            writeln("take(", i, ") = ", strfmt(abs(getsol(take(i))),2,5), "  (", VALUE(i), ", ", WEIGHT(i), ")")
+    end-procedure
+
+    function minUno(v: real) : boolean
+        returned := if (v <= 1-MyEps, true, false)
+    end-function
+
+end-model
