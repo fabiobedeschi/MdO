@@ -1,0 +1,115 @@
+!@encoding CP1252
+
+model LotSizing
+
+uses "mmxprs", "mmsystem"
+
+! Disable some features to didactical purposes
+setparam("XPRS_PRESOLVE", 0)
+setparam("XPRS_CUTSTRATEGY", 0)
+setparam("XPRS_VERBOSE", 0)
+
+forward procedure writesol
+
+declarations
+    n_times = 15
+    TIMES = 1..n_times
+    x_prod, y_setup, h_inv: array(TIMES) of mpvar
+    SETUPCOST, PRODCOST, INVCOST, DEMAND, D: array(TIMES) of integer
+    LPI: real
+    ProdPlan, ProdSetup : array(TIMES) of linctr
+end-declarations
+
+initialisations from "els-small.dat"
+    SETUPCOST
+    PRODCOST
+    INVCOST
+    DEMAND
+end-initialisations
+
+forall(t in TIMES) D(t) := sum(k in TIMES | k>=t) DEMAND(k)
+
+ProdPlan(1) := x_prod(1) = DEMAND(1) + h_inv(1)  ! base case
+forall(t in TIMES | t > 1)
+    ProdPlan(t) := x_prod(t) + h_inv(t-1) = DEMAND(t) + h_inv(t)  ! recursive case
+h_inv(n_times) = 0  ! end case
+
+forall(t in TIMES) do
+    x_prod(t) <= D(t)  ! upper limit on production
+    ProdSetup(t) := y_setup(t) *D(t) >= x_prod(t)  ! setup constraint
+    y_setup(t) is_binary  ! setup binary variable
+end-do
+
+MinCostI := sum(t in TIMES) (SETUPCOST(t)*y_setup(t) + PRODCOST(t)*x_prod(t) + INVCOST(t)*h_inv(t))
+
+minimize(XPRS_LIN+XPRS_PRI, MinCostI)
+writesol
+LPI := getobjval
+
+minimize(MinCostI)
+writeln("Integer solution: ", getobjval, "\t", "costLP: ", LPI)
+
+declarations
+    xsol, ysol, hsol: array(TIMES) of real  ! help vars
+    Iter, IterCut: integer
+    MyEps: real
+    MyCut: array(range) of linctr
+    MyBase: basis 
+end-declarations
+
+Iter := 0
+MyEps := 1
+
+repeat
+    Iter := Iter + 1
+    IterCut := 0
+    minimize(XPRS_LIN+XPRS_PRI, MinCostI)
+    writesol
+    LPI := getobjval
+    savebasis(MyBase)
+
+    forall(t in TIMES) do
+        xsol(t) := getsol(x_prod(t))
+        ysol(t) := getsol(y_setup(t))
+        hsol(t) := getsol(h_inv(t))
+    end-do
+
+    ! search for violated constraint of type x_prod(t) <= y_setup(t)*DEMAND(t) + h_inv(t)
+    forall(t in TIMES) do
+        if xsol(t)-MyEps >= ysol(t)*DEMAND(t) + hsol(t) then
+            IterCut := IterCut + 1
+            MyCut(Iter) := x_prod(t) <= y_setup(t)*DEMAND(t) + h_inv(t)
+            writeln("COND 1 -----------------------------------------------------")
+        end-if
+        if (t >= 2) and (hsol(t-1)+MyEps <= DEMAND(t)*(1-ysol(t))) then
+            IterCut := IterCut + 1
+            MyCut(Iter) := h_inv(t-1) >= DEMAND(t)*(1-y_setup(t))
+            writeln("COND 2 -----------------------------------------------------")
+
+        end-if
+    end-do
+
+    writeln("ITER: ", Iter)
+    writeln("ITER_CUT: ", IterCut)
+
+    loadprob(MinCostI)
+    loadbasis(MyBase)
+until (IterCut <= 0)  ! no more cuts
+
+writeln("No more cuts")
+
+! ----------------------------------------------------------------------------
+procedure writesol      ! Pretty print the solution
+    writeln
+    writeln("Solution: ", getobjval)
+    forall(t in TIMES) do
+        write("t=", strfmt(t,2), "\t", "y=", strfmt(getsol(y_setup(t)),2,2),
+              "\t", "x=", if(getsol(x_prod(t))>0, strfmt(getsol(x_prod(t)),2,1), "-"),
+              "\t", "dem=", strfmt(DEMAND(t),2), "\t", "D=", strfmt(D(t),3),
+              "\t", "h=", strfmt(getsol(h_inv(t)),3,1))
+        writeln
+    end-do
+end-procedure
+
+
+end-model

@@ -1,0 +1,50 @@
+!@encoding CP1252
+
+model Facilities
+uses "mmxprs";
+
+declarations
+    nJ, mI : integer
+    BigM, CostRange : integer
+    Cardinality : integer
+end-declarations
+
+nJ := 16
+mI := 50
+BigM := 7500
+CostRange := 5000
+Cardinality := floor(nJ/5)
+
+declarations
+    CLIENTS = 1..mI
+    FACILITIES = 1..nJ
+
+    COST : array(FACILITIES, CLIENTS) of real
+    FXCOST : array(FACILITIES) of real
+    X : array(FACILITIES, CLIENTS) of mpvar
+    Y : array(FACILITIES) of mpvar
+    FLCOST : linctr
+end-declarations
+
+! Using random values. Multiple runs will have different results. Gap between result is the meaningful part
+forall (j in FACILITIES) FXCOST(j) := real(floor(random * BigM))
+forall (j in FACILITIES, i in CLIENTS) COST(j, i) := real(floor(random * CostRange))
+
+forall (j in FACILITIES) Y(j) is_binary
+forall (j in FACILITIES, i in CLIENTS) X(j, i) is_binary
+
+Card := sum(j in FACILITIES) Y(j) = Cardinality  ! Cardinality constraint
+forall (i in CLIENTS) sum(j in FACILITIES) X(j, i) = 1  ! Semiassignment constraint
+! forall (j in FACILITIES) sum(i in CLIENTS) X(j, i) <= mI*Y(j)  ! Capacity constraint
+forall (j in FACILITIES, i in CLIENTS) X(j, i) <= Y(j)  ! More powerful capacity constraint
+
+
+FLCOST := sum(j in FACILITIES) Y(j)*FXCOST(j) + sum(j in FACILITIES, i in CLIENTS) COST(j, i)*X(j, i)
+
+minimize(XPRS_LIN, FLCOST)
+writeln(getobjval)
+
+minimize(FLCOST)
+writeln(getobjval)
+
+end-model
