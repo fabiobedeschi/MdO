@@ -48,10 +48,27 @@ model "zainocover1"
     forall(i in ITEMS)
         z(i) is_binary                              ! binary variables
 
+
+    ! Used for lifting
+    declarations
+        LiftedCoeff: array(ITEMS) of real       ! lifting coefficients
+        zStar: array(ITEMS) of real             ! best solution found in cover
+        y: array(ITEMS) of mpvar                ! lifting variables
+        chosen: array(ITEMS) of boolean
+        LiftedCap: linctr                       ! lifting capacity constraint
+        beta: real                              ! max coefficient of the new lifted var
+        IntSol: boolean                         ! indicates if the solution is integer
+    end-declarations
+
+    forall(i in ITEMS)
+        y(i) is_binary
+
     Iter := 0
     while(true) do
         writeln
         Iter += 1; writeln("-"*60, " Iteration ", Iter)
+
+        IntSol := true
 
         solvePrint(true)
         MyKnapsackBound := getobjval            ! get the bound on the knapsack
@@ -59,12 +76,22 @@ model "zainocover1"
         forall(i in ITEMS)
             xStar(i) := getsol(take(i))         ! get the best solution found
 
-        forall(i in ITEMS)
-            if xStar(i) = 0 then
+        forall(i in ITEMS) do
+            if xStar(i)=0 then
                 xStarBound(i) := z(i) = 0
             else
                 xStarBound(i) := 0
+                ! check if the var has not an integer value
+                if xStar(i) < 1-MyEps then
+                    IntSol := false
+                end-if
             end-if
+        end-do
+
+        if IntSol then
+            writeln("="*60, " Integer solution found at iteration ", Iter)
+            exit(1)
+        end-if
 
         MinVal := sum(i in ITEMS) z(i) * (1-xStar(i))    ! separation problem objective function
         sum(i in ITEMS) z(i) * WEIGHT(i) >= WTMAX+1      ! cover constraint
@@ -81,13 +108,40 @@ model "zainocover1"
                 write(i, " ")
             writeln("]")
 
-            HeaviestInCover := 0.0
-            forall(i in ITEMS | getsol(z(i))=1)
-                if HeaviestInCover < WEIGHT(i) then
-                    HeaviestInCover := WEIGHT(i)
-                end-if
+            ! Start the lifting procedure
+            forall(i in ITEMS) do
+                chosen(i) := false
+                LiftedCoeff(i) := 0
+            end-do
+            forall(i in ITEMS | getsol(z(i))=1) do
+                chosen(i) := true
+                LiftedCoeff(i) := 1
+            end-do
 
-            CutList(Iter) := sum(i in ITEMS | getsol(z(i))=1 or (WEIGHT(i) > HeaviestInCover)) take(i) <= CoverSize-1
+            forall(i in ITEMS | chosen(i)=false) do
+                beta := 0
+                LiftedCap := sum(j in ITEMS | LiftedCoeff(j)>0) WEIGHT(j) * y(j) <= WTMAX - WEIGHT(i)
+                maximize(sum(j in ITEMS) LiftedCoeff(j) * y(j))
+                beta := getobjval
+                if CoverSize-1-beta > 0 then
+                    LiftedCoeff(i) := CoverSize-1-beta
+                else
+                    LiftedCoeff(i) := 0
+                end-if
+                chosen(i) := true
+                if LiftedCoeff(i) > 0 then
+                    writeln("Lifted var ", i, " with coefficient ", LiftedCoeff(i))
+                end-if
+            end-do
+
+            !HeaviestInCover := 0.0
+            !forall(i in ITEMS | getsol(z(i))=1)
+            !    if HeaviestInCover < WEIGHT(i) then
+            !        HeaviestInCover := WEIGHT(i)
+            !    end-if
+            !CutList(Iter) := sum(i in ITEMS | getsol(z(i))=1 or (WEIGHT(i) > HeaviestInCover)) take(i) <= CoverSize-1
+
+            CutList(Iter) := sum(i in ITEMS) take(i)*LiftedCoeff(i) <= CoverSize-1
 
         else
             ! no new cut found, exit
