@@ -1,0 +1,143 @@
+!@encoding CP1251
+
+model SetPartitioning
+
+    uses "mmxprs", "mmsystem"
+
+    parameters
+        MyEps = 1e-6
+        MyVerbose = true
+    end-parameters
+
+    declarations
+        N_PAIRS = 9
+        PAIRS = 1..N_PAIRS
+        N_LEGS = 6
+        LEGS = 1..N_LEGS
+
+        PairX: array(PAIRS) of mpvar
+        PairCost: array(PAIRS) of real
+
+        A: array(LEGS, PAIRS) of integer
+
+        Cost: linctr
+    end-declarations
+
+    forward procedure buildConflictGraph(M: array(LEGS, PAIRS) of integer)
+    forward procedure printData(M: array(LEGS, PAIRS) of integer)
+    forward procedure printConflictGraph(M: array(PAIRS, PAIRS) of integer)
+
+    initializations from "A.dat"
+        A
+    end-initializations
+
+    forall(i in PAIRS) PairX(i) is_binary           ! set binary variables
+
+    PairCost :: [2,2,2,1,1,1,1,2]                   ! this should come from a .dat file
+    cost := sum(i in PAIRS) PairCost(i) * PairX(i)  ! objective function
+
+    forall(l in LEGS)
+        sum(i in PAIRS) A(l,i) * PairX(i) = 1       ! set partitioning constraint
+
+    ! Structures for the conflict graph
+    ! NB: `dynamic` has knowledge of the dimension of the array but it's not allocated yet
+    !     `range` is a mutable dimension of the array
+    declarations
+        ConflictG: dynamic array(PAIRS, PAIRS) of integer   ! matrix containg 1 if the edge exists in the graph
+        XStar: array(PAIRS) of real                         ! copy of the optimal x solutions
+        CliqueNodes: array(PAIRS) of mpvar                  ! variables for the clique nodes
+        CliqueWeights: linctr
+        MyCuts: array(range) of linctr
+        Iter, TotalCuts: integer
+        ViolatedCut: boolean
+        CliqueNodeUB: array(PAIRS) of linctr                ! set to 0 variables of nodes where x* = 0
+    end-declarations
+
+    buildConflictGraph(A)
+
+    forall(p in PAIRS) CliqueNodes(p) is_binary             ! set binary variables for the clique nodes
+
+    ! Subproblem is to take the clique with MAXIMUM weight
+    forall(p,q in PAIRS | q>p and ConflictG(p,q)=0) do
+        CliqueNodes(p) + CliqueNodes(q) <= 1
+    end-do
+
+    ! TODO: complete the model
+
+    ! ----------------------------------------------------------------------------
+    ! ----------------------- Procedures and Functions ---------------------------
+    ! ----------------------------------------------------------------------------
+
+    procedure buildConflictGraph(M: array(LEGS, PAIRS) of integer)
+        ! Initialize the matrix to 0 (only upper triangle)
+        forall(p,q in PAIRS | q>p) ConflictG(p,q) := 0
+
+        ! Fill the matrix with the edges
+        forall(p in PAIRS, l in LEGS | M(l,p)=1) do
+            !writeln("p=", p, " l=", l, " M(l,p)=", M(l,p))
+            forall(q in PAIRS | q>p and M(l,q)=1) do
+                !writeln(" "*4, "q=", q, " l=", l, " M(l,q)=", M(l,q))
+                ConflictG(p,q) := 1
+            end-do
+        end-do
+
+        ! Print results to the screen
+        if MyVerbose then
+            printData(M)
+            printConflictGraph(ConflictG)
+        end-if
+    end-procedure
+
+    procedure printData(M: array(LEGS, PAIRS) of integer)
+        writeln("Data:")
+
+        ! Header
+        write(" "*4, "| ")
+        forall(p in PAIRS) write(p, " ")
+        writeln
+
+        ! Divider
+        write(" "*2, "--|")
+        forall(p in PAIRS) write("--")
+        writeln
+
+        ! Content
+        forall(l in LEGS) do
+            write(" "*2)
+            write(l, " | ")
+            forall(p in PAIRS)
+                write(M(l,p), " ")
+            writeln
+        end-do
+
+        writeln
+    end-procedure
+
+    procedure printConflictGraph(CG: array(PAIRS, PAIRS) of integer)
+        writeln("Conflict graph:")
+
+        ! Header
+        write(" "*4, "| ")
+        forall(p in PAIRS) write(p, " ")
+        writeln
+
+        ! Divider
+        write(" "*2, "--|")
+        forall(p in PAIRS) write("--")
+        writeln
+
+        forall(p in PAIRS) do
+            write(" "*2)
+            write(p, " | ")
+            !write(" "*4)
+            write("  "*p)
+            forall(q in PAIRS | q>p) do
+                write(ConflictG(p,q), " ")
+            end-do
+            writeln
+        end-do
+
+        writeln
+    end-procedure
+
+end-model
