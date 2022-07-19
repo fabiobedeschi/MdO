@@ -1,0 +1,264 @@
+(!
+Routing cost spanning tree: dato un grafo non orientato e pesato,
+trovare l’albero di copertura che minimizza la somma del costo dei cammini tra ogni coppia di nodi.
+Per 3 persone: ogni coppia di nodi i e j deve spedirsi una domanda d_ij
+utilizzando l’unico cammino che collega i e j sull’albero.
+Si vuole minimizzare la somma su tutte le coppie di nodi dei costi di spedizione.
+!)
+
+model "MST"
+
+    uses "mmxprs", "mmsystem"
+
+    setparam("XPRS_PRESOLVE", 0)
+    setparam("XPRS_CUTSTRATEGY", 0)
+    setparam("XPRS_VERBOSE", 0)
+
+    ! --------------------------------------------------------------------------------
+    ! DATA READING -------------------------------------------------------------------
+    ! --------------------------------------------------------------------------------
+
+        declarations
+            file_path = "graph_3.dat"
+            N: integer                              ! number of nodes
+        end-declarations
+        initialisations from file_path
+            N
+        end-initialisations
+        declarations
+            NODES = 1..N                               ! nodes
+            GRAPH: array(NODES,NODES) of integer       ! matrix of edges in the graph (undirected, 0 if no edge, 1 if edge exists)
+            COSTS: array(NODES,NODES) of real          ! matrix of costs of the edges
+        end-declarations
+        initialisations from file_path
+            GRAPH
+            COSTS
+        end-initialisations
+
+    ! --------------------------------------------------------------------------------
+    ! DECLARATIONS -------------------------------------------------------------------
+    ! --------------------------------------------------------------------------------
+
+        declarations
+            x: dynamic array(NODES,NODES) of mpvar      ! selected edges variable (1 if edge is selected, 0 otherwise)
+            tree_cost: linctr                           ! cost of the tree
+
+            iter: integer                               ! iterator counter
+            violation: boolean                          ! found violation of a constraint
+            violation_counter: integer                            ! counter for the number of violated constraints
+            violation_ctrs: dynamic array(range) of linctr    ! violated constraints
+
+            visited: set of integer                    ! set of visited nodes while searching for cycles
+
+            DIR_NODES = 1..(N+2)                                ! nodes of the tree plus a source (1) and a sink (N+2)
+            DIR_GRAPH: array(DIR_NODES, DIR_NODES) of integer   ! matrix of edges in the oriented graph G(from,to)
+            DIR_CAP: array(DIR_NODES, DIR_NODES) of real        ! matrix of capacity of the edges in the oriented graph
+
+        end-declarations
+
+    ! --------------------------------------------------------------------------------
+    ! PROCEDURES & FUNCTIONS ---------------------------------------------------------
+    ! --------------------------------------------------------------------------------
+
+        procedure print_matrix_integer(m: array(r: range, range) of integer, upper_only: boolean)
+            ! Header
+            write("   | ")
+            forall (i in r)
+                write(strfmt(i, 4), " ")
+            writeln
+            writeln("-"*(5*getsize(r)+4))
+
+            forall (i in r) do
+                write(strfmt(i, 2), " | ")
+                forall (j in r) do
+
+                    if ((i>=j or m(i,j)=0) and upper_only) then
+                        write(" ·")
+                        !write(" ")
+                    else
+                        write(strfmt(m(i,j), 4))
+                    end-if
+
+                    if (j < getsize(r)) then
+                        write(" ")
+                    else
+                        writeln
+                    end-if
+                end-do
+            end-do
+            writeln
+        end-procedure
+
+        procedure print_matrix_real(m: array(r: range, range) of real, upper_only: boolean)
+            ! Header
+            write("   | ")
+            forall (i in r)
+                write(strfmt(i, 4), " ")
+            writeln
+            writeln("-"*(5*getsize(r)+4))
+
+            forall (i in r) do
+                write(strfmt(i, 2), " | ")
+                forall (j in r) do
+
+                    if ((i>=j or m(i,j)=0) and upper_only) then
+                        write(" ·")
+                        !write(" ")
+                    else
+                        write(strfmt(m(i,j), 4))
+                    end-if
+
+                    if (j < getsize(r)) then
+                        write(" ")
+                    else
+                        writeln
+                    end-if
+                end-do
+            end-do
+            writeln
+        end-procedure
+
+        procedure print_matrix_mpvar(m: array(r:range, range) of mpvar, upper_only: boolean)
+            ! Header
+            write("   | ")
+            forall (i in r)
+                write(strfmt(i, 2), " ")
+            writeln
+            writeln("-"*(3*getsize(r)+4))
+
+            forall (i in r) do
+                write(strfmt(i, 2), " | ")
+                forall (j in r) do
+
+                    if ((i>=j or abs(getsol(m(i,j)))=0) and upper_only) then
+                        write(" ·")
+                        !write(" ")
+                    else
+                        write(strfmt(abs(getsol(m(i,j))), 2))
+                    end-if
+
+                    if (j < getsize(r)) then
+                        write(" ")
+                    else
+                        writeln
+                    end-if
+                end-do
+            end-do
+            writeln
+        end-procedure
+
+        procedure build_oriented_graph
+            ! Copy the original graph
+            forall (i,j in NODES | i<j) do
+                DIR_CAP(i+1,j+1) := getsol(x(i,j))/2
+                DIR_CAP(j+1,i+1) := getsol(x(i,j))/2
+            end-do
+
+            ! Add the source edges
+            forall(j in NODES) do
+                DIR_GRAPH(1,j+1) := 1
+            end-do
+
+            ! Add the sink edges
+            forall(i in NODES) do
+                DIR_GRAPH(i+1,N+2) := 1
+            end-do
+
+            writeln("DIR_GRAPH: ")
+            print_matrix_integer(DIR_GRAPH, false)
+        end-procedure
+
+        procedure build_oriented_capacities
+            ! Split the original capacities
+            forall (i,j in NODES | i<j) do
+                DIR_CAP(i+1,j+1) := getsol(x(i,j))/2
+                DIR_CAP(j+1,i+1) := getsol(x(i,j))/2
+            end-do
+
+            ! Add the source capacities
+            forall(k in NODES) do
+                DIR_CAP(1,k+1) := ((sum(i in NODES | i<k) getsol(x(i,k))) + (sum(j in NODES | j>k) getsol(x(k,j))))/2
+            end-do
+
+            ! Add the sink capacities
+            forall(i in NODES) do
+                DIR_CAP(i+1,N+2) := 1
+            end-do
+
+            writeln("DIR_CAP: ")
+            print_matrix_real(DIR_CAP, false)
+        end-procedure
+
+        procedure build_path_from(node: integer)
+            ! Build the path from the node
+            if (node in visited) then
+                violation := true
+            else
+                visited += {node}
+                forall (i in NODES | i>node) do
+                    if (getsol(x(node,i)) > 0) then
+                        build_path_from(i)
+                    end-if
+                end-do
+            end-if
+        end-procedure
+
+    ! --------------------------------------------------------------------------------
+    ! MODEL --------------------------------------------------------------------------
+    ! --------------------------------------------------------------------------------
+
+        ! Integrity
+        forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+            create(x(i,j))
+            x(i,j) is_binary
+        end-do
+
+        ! Cardinality
+        sum (i,j in NODES | i<j and GRAPH(i,j)=1) x(i,j) = N-1
+
+        ! Objective
+        tree_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) COSTS(i,j) * x(i,j)
+
+        ! TODO: modify the objective to solve the given problem not just the MST
+        iter := 0
+        violation_counter := 0
+        repeat
+            violation := false
+            iter := iter + 1
+
+            minimize(XPRS_LIN, tree_cost)
+            !minimize(tree_cost)
+
+            writeln
+            writeln("-"*80, " ", "Iter ", iter)
+            writeln("SELECTED EDGES: ")
+            print_matrix_mpvar(x, true)
+            writeln("TREE COST: ", getobjval)
+            writeln
+
+            ! Search for cycles
+            forall (i in NODES) do
+                visited := {}
+
+                ! Build the path from the node and set "violation" if a cycle is found
+                build_path_from(i)
+
+                if (violation) then
+                    violation_counter := violation_counter + 1
+                    writeln("Violation detected! This set is a cycle: ", visited)
+                    writeln("Violation counter: ", violation_counter)
+
+                    ! Remove the cycle with new constraint
+                    create(violation_ctrs(violation_counter))
+                    violation_ctrs(violation_counter) := sum(p,q in visited | p<q) x(p,q) <= getsize(visited)-1
+
+                    ! Restart the search
+                    break
+
+                end-if
+            end-do
+
+        until (not(violation))
+
+
+end-model
