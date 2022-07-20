@@ -1,0 +1,377 @@
+# Routing cost spanning tree: dato un grafo non orientato e pesato,
+# trovare l’albero di copertura che minimizza la somma del costo dei cammini tra ogni coppia di nodi.
+# Per 3 persone: ogni coppia di nodi i e j deve spedirsi una domanda d_ij
+# utilizzando l’unico cammino che collega i e j sull’albero.
+# Si vuole minimizzare la somma su tutte le coppie di nodi dei costi di spedizione.
+
+
+model "MST"
+
+    uses "mmxprs", "mmsystem"
+
+    setparam("XPRS_PRESOLVE", 0)
+    setparam("XPRS_CUTSTRATEGY", 0)
+    setparam("XPRS_VERBOSE", 0)
+
+    # --------------------------------------------------------------------------------
+    # DATA READING -------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+
+        declarations
+            file_path = "graph_9.dat"
+            N: integer                              # number of nodes
+        end-declarations
+        initialisations from file_path
+            N
+        end-initialisations
+        declarations
+            NODES = 1..N                               # nodes
+            GRAPH: array(NODES,NODES) of integer       # matrix of edges in the graph (undirected, 0 if no edge, 1 if edge exists)
+            COSTS: array(NODES,NODES) of real          # matrix of costs of the edges
+        end-declarations
+        initialisations from file_path
+            GRAPH
+            COSTS
+        end-initialisations
+
+        # Ensure simmetry of the graph using the upper right triangle of the matrix
+        forall(i,j in NODES  | i<j) do
+            GRAPH(j,i) := GRAPH(i,j)
+            COSTS(j,i) := COSTS(i,j)
+        end-do
+
+    # --------------------------------------------------------------------------------
+    # DECLARATIONS -------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+
+        declarations
+            x: dynamic array(NODES,NODES)       of mpvar        # variable x_ij = 1 if EDGE from i to j is selected, 0 otherwise
+            y: dynamic array(NODES,NODES,range) of mpvar        # variable y_ijk = 1 if k-nth PATH from i to j is selected, 0 otherwise
+
+            PATHS: dynamic array(NODES,NODES,MP:range) of list of list of integer   # list of available paths between each pair of nodes
+            DISTS: dynamic array(NODES,NODES,range) of real     # matrix of distances (path cost) between each pair of nodes
+
+            paths: set of list of list of integer               # global accumulator of paths
+            visited: set of integer                             # global accumulator of nodes
+
+            iter: integer                                       # iterator counter
+            violation: boolean                                  # found violation of a constraint
+            v_cnt: integer                                      # counter for the number of violated constraints
+            v_ctrs: dynamic array(range) of linctr              # violated constraints
+
+            cost_function: linctr
+
+        end-declarations
+
+        forward procedure print_sol(final: boolean)
+        forward function pretty_path(path: list of list of integer) : list of integer
+        forward function exists_path(s,d:integer) : boolean
+        forward function path_cost(s,d:integer) : real
+        forward procedure print_matrix_integer(m: array(r: range, range) of integer, upper_only: boolean)
+        forward procedure print_matrix_real(m: array(r: range, range) of real, upper_only: boolean)
+        forward procedure print_matrix_mpvar(m: array(r: range, range) of mpvar, upper_only: boolean)
+        forward function search_all_paths(s,d: integer) : set of list of list of integer
+        forward procedure _search_all_paths(s,d: integer, p: list of list of integer)
+        forward procedure discover_cycle_from(s: integer)
+        forward function edge_in_path(e: list of integer, p: list of list of integer) : boolean
+
+    # --------------------------------------------------------------------------------
+    # MODEL --------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+
+        # Instantiate a decision variable for each edge
+        forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+            create(x(i,j))
+            x(i,j) is_binary
+
+            create(x(j,i))
+            x(j,i) is_binary
+
+            x(j,i) = x(i,j)
+        end-do
+
+        # Select exactly N-1 edges to form a tree
+        sum (i,j in NODES | i<j and GRAPH(i,j)=1) x(i,j) = N-1
+
+        # Compute all possible paths with their cost and instantiate a decision variable for each one
+        forall (i,j in NODES | i<j) do
+            forall(cnt as counter, path in search_all_paths(i,j)) do
+                create(y(i,j,cnt))
+                y(i,j,cnt) is_binary  # TODO: is this needed?
+
+                create(PATHS(i,j,cnt))
+                PATHS(i,j,cnt) := path
+
+                create(DISTS(i,j,cnt))
+                DISTS(i,j,cnt) := sum(edge in path) COSTS(edge(1), edge(2))
+            end-do
+        end-do
+
+        # Simmetry of the paths matrix
+        forall (i,j in NODES, k in MP | i<j and exists(y(i,j,k))) do
+            create(y(j,i,k))
+            y(j,i,k) is_binary
+            y(j,i,k) = y(i,j,k)
+
+            create(PATHS(j,i,k))
+            forall (edge in getreverse(PATHS(i,j,k)))
+                PATHS(j,i,k) += [getreverse(edge)]
+
+            create(DISTS(j,i,k))
+            DISTS(j,i,k) := DISTS(i,j,k)
+        end-do
+
+        # Exactly a single path between each pair of nodes
+        forall(i,j in NODES | i<j) do
+            sum(k in MP | exists(y(i,j,k))) y(i,j,k) = 1
+        end-do
+
+        # Paths can use only edges of a tree
+        # forall(i,j in NODES | i<j and GRAPH(i,j)=1)
+        #     forall(s,d in NODES | s<>d and not(s=i and d=j))
+        #         sum (k in MP | exists(y(s,d,k)) and edge_in_path([i,j], PATHS(s,d,k))) y(s,d,k) <= x(i,j)
+
+        # cost_function := sum(i,j in NODES | i<j) (sum(k in MP | exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k))
+        cost_function := sum(i,j in NODES, k in MP | i<j and exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k)
+
+        iter := 0
+        v_cnt := 0
+        MAX_ITER := 10000
+        repeat
+            violation := false
+            iter := iter + 1
+
+            minimize(XPRS_LIN, cost_function)
+            # minimize(cost_function)
+            print_sol(false)
+
+            # Dynamic constraint to allow only paths that use edges of the tree (this should avoid cycles too)
+            "SearchViolationLoop": forall(i,j in NODES | i<j and GRAPH(i,j)=1 and getsol(x(i,j))<1)
+                forall(s,d in NODES | s<>d and not(s=i and d=j))
+                    forall (k in MP | exists(y(s,d,k)) and getsol(y(s,d,k))>0 and edge_in_path([i,j], PATHS(s,d,k))) do
+                        # Found a violation
+                        violation := true
+                        v_cnt := v_cnt + 1
+                        writeln("Violation ", v_cnt, "! Selected path ", pretty_path(PATHS(s,d,k)), " contains edge ", [i,j], " which is NOT in the tree")
+
+                        forall(ss,dd in NODES | ss<>dd and not(ss=i and dd=j))
+                            sum (kk in MP | exists(y(ss,dd,kk)) and edge_in_path([i,j], PATHS(ss,dd,kk))) y(ss,dd,kk) <= x(i,j)
+
+                        break "SearchViolationLoop"
+                    end-do
+
+
+        until (not(violation) or iter>=MAX_ITER)
+
+        minimize(cost_function)
+        print_sol(true)
+
+    # --------------------------------------------------------------------------------
+    # PROCEDURES & FUNCTIONS ---------------------------------------------------------
+    # --------------------------------------------------------------------------------
+
+        function edge_in_path(e: list of integer, p: list of list of integer) : boolean
+            forall(edge in p) do
+                if (e=edge or e=getreverse(edge)) then
+                    returned := true
+                    break
+                else
+                    returned := false
+                end-if
+            end-do
+        end-function
+
+        procedure discover_cycle_from(s: integer)
+            # Build the path from the source
+            if (s in visited) then
+                violation := true
+            else
+                visited += {s}
+                forall (i in NODES | i>s) do
+                    if (getsol(x(s,i))>0) then
+                        discover_cycle_from(i)
+                    end-if
+                end-do
+            end-if
+        end-procedure
+
+        function search_all_paths(s,d: integer): set of list of list of integer
+            paths := {}
+            visited := {}
+            _search_all_paths(s,d,[])
+            returned := paths
+        end-function
+
+        procedure _search_all_paths(s,d: integer, p: list of list of integer)
+            forall (j in NODES | GRAPH(s,j)=1 and j not in visited) do
+                if j=d then
+                    paths += {p+[[s,j]]}
+                else
+                    visited += {s}
+                    _search_all_paths(j,d,p+[[s,j]])
+                    visited -= {s}
+                end-if
+            end-do
+        end-procedure
+
+        function pretty_path(p: list of list of integer): list of integer
+            returned := [p(1)(1)]
+            forall (i in 1..getsize(p)) do
+               returned := returned + [p(i)(2)]
+            end-do
+        end-function
+
+        procedure print_sol(final: boolean)
+            writeln
+            if (final) then
+                writeln("-"*60, " ", "Final")
+            else
+                writeln("-"*60, " ", "Iter ", iter)
+            end-if
+            writeln("SELECTED EDGES: ")
+            print_matrix_mpvar(x, true)
+
+            writeln("SELECTED PATHS: ")
+            forall(i,j in NODES | i<j) do
+                forall(k in MP | getsol(y(i,j,k))>0) do
+                    writeln(i," -> ",j, "\tC:", DISTS(i,j,k), "\tP: ", pretty_path(PATHS(i,j,k)), "\ty:", getsol(y(i,j,k)))
+                end-do
+            end-do
+            writeln
+
+            tree_cost_cumulative := 0.0
+            forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+                tree_cost_cumulative := tree_cost_cumulative + COSTS(i,j) * getsol(x(i,j))
+            end-do
+
+            route_cost_cumulative := 0.0
+            forall (i,j in NODES | i<j) do
+                visited := {}
+                route_cost_cumulative += path_cost(i,j)
+            end-do
+
+            writeln("TREE COST:\t", tree_cost_cumulative)
+            writeln("ROUTING COST:\t", route_cost_cumulative)
+            writeln("OBJECTIVE:\t", getobjval)
+            writeln
+        end-procedure
+
+        function exists_path(s,d: integer): boolean
+            # Check if there is a path from s to d
+
+            returned := false
+            if (s=d or getsol(x(s,d))>0 or getsol(x(d,s))>0) then
+                visited += {s,d}
+                returned := true
+            else
+                visited += {s}
+                forall (i in (NODES-visited) | getsol(x(s,i))>0 or getsol(x(i,s))>0) do
+                    if (exists_path(i,d)) then
+                        returned := true
+                        visited += {d}
+                    else
+                        visited -= {i}
+                    end-if
+                end-do
+            end-if
+        end-function
+
+        function path_cost(s,d: integer): real
+            # Get the path cost from the source to the destinantion nodes
+            if (s = d) then
+                returned := 0
+            else
+                visited := {}
+                if (exists_path(s,d)) then
+                    returned := sum(n in 1..(getsize(visited)-1)) COSTS(visited(n), visited(n+1))
+                end-if
+            end-if
+        end-function
+
+        procedure print_matrix_integer(m: array(r: range, range) of integer, upper_only: boolean)
+            # Header
+            write("   | ")
+            forall (i in r)
+                write(strfmt(i, 4), " ")
+            writeln
+            writeln("-"*(5*getsize(r)+4))
+
+            forall (i in r) do
+                write(strfmt(i, 2), " | ")
+                forall (j in r) do
+
+                    if ( (i>=j or m(i,j)=0) and upper_only) then
+                        write(" ·")
+                        #write(" ")
+                    else
+                        write(strfmt(m(i,j), 4))
+                    end-if
+
+                    if (j < getsize(r)) then
+                        write(" ")
+                    else
+                        writeln
+                    end-if
+                end-do
+            end-do
+            writeln
+        end-procedure
+
+        procedure print_matrix_real(m: array(r: range, range) of real, upper_only: boolean)
+            # Header
+            write("   | ")
+            forall (i in r)
+                write(strfmt(i, 4), " ")
+            writeln
+            writeln("-"*(5*getsize(r)+4))
+
+            forall (i in r) do
+                write(strfmt(i, 2), " | ")
+                forall (j in r) do
+
+                    if ((i>=j or m(i,j)=0) and upper_only) then
+                        write("   ·")
+                    else
+                        write(strfmt(m(i,j), 4))
+                    end-if
+
+                    if (j < getsize(r)) then
+                        write(" ")
+                    else
+                        writeln
+                    end-if
+                end-do
+            end-do
+            writeln
+        end-procedure
+
+        procedure print_matrix_mpvar(m: array(r:range, range) of mpvar, upper_only: boolean)
+            # Header
+            write("    | ")
+            forall (i in r)
+                write(strfmt(i, 3), " ")
+            writeln
+            writeln("-"*(5*getsize(r)+4))
+
+            forall (i in r) do
+                write(strfmt(i, 3), " | ")
+                forall (j in r) do
+
+                    if ( (i>=j or getsol(m(i,j))=0) and upper_only) then
+                        write("  ·")
+                        #write(" ")
+                    else
+                        write(strfmt(getsol(m(i,j)), 3))
+                    end-if
+
+                    if (j < getsize(r)) then
+                        write(" ")
+                    else
+                        writeln
+                    end-if
+                end-do
+            end-do
+            writeln
+        end-procedure
+
+end-model

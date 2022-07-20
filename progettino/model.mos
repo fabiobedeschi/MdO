@@ -19,7 +19,7 @@ model "MST"
     ! --------------------------------------------------------------------------------
 
         declarations
-            file_path = "graph_3.dat"
+            file_path = "graph_7.dat"
             N: integer                              ! number of nodes
         end-declarations
         initialisations from file_path
@@ -51,9 +51,8 @@ model "MST"
 
             visited: set of integer                    ! set of visited nodes while searching for cycles
 
-            DIR_NODES = 1..(N+2)                                ! nodes of the tree plus a source (1) and a sink (N+2)
-            DIR_GRAPH: array(DIR_NODES, DIR_NODES) of integer   ! matrix of edges in the oriented graph G(from,to)
-            DIR_CAP: array(DIR_NODES, DIR_NODES) of real        ! matrix of capacity of the edges in the oriented graph
+            dist: array(NODES,NODES) of mpvar          ! matrix of distances between nodes
+            !dist: array(NODES,NODES) of real         ! matrix of distances between nodes (real)
 
         end-declarations
 
@@ -103,8 +102,7 @@ model "MST"
                 forall (j in r) do
 
                     if ((i>=j or m(i,j)=0) and upper_only) then
-                        write(" ·")
-                        !write(" ")
+                        write("   ·")
                     else
                         write(strfmt(m(i,j), 4))
                     end-if
@@ -148,48 +146,6 @@ model "MST"
             writeln
         end-procedure
 
-        procedure build_oriented_graph
-            ! Copy the original graph
-            forall (i,j in NODES | i<j) do
-                DIR_CAP(i+1,j+1) := getsol(x(i,j))/2
-                DIR_CAP(j+1,i+1) := getsol(x(i,j))/2
-            end-do
-
-            ! Add the source edges
-            forall(j in NODES) do
-                DIR_GRAPH(1,j+1) := 1
-            end-do
-
-            ! Add the sink edges
-            forall(i in NODES) do
-                DIR_GRAPH(i+1,N+2) := 1
-            end-do
-
-            writeln("DIR_GRAPH: ")
-            print_matrix_integer(DIR_GRAPH, false)
-        end-procedure
-
-        procedure build_oriented_capacities
-            ! Split the original capacities
-            forall (i,j in NODES | i<j) do
-                DIR_CAP(i+1,j+1) := getsol(x(i,j))/2
-                DIR_CAP(j+1,i+1) := getsol(x(i,j))/2
-            end-do
-
-            ! Add the source capacities
-            forall(k in NODES) do
-                DIR_CAP(1,k+1) := ((sum(i in NODES | i<k) getsol(x(i,k))) + (sum(j in NODES | j>k) getsol(x(k,j))))/2
-            end-do
-
-            ! Add the sink capacities
-            forall(i in NODES) do
-                DIR_CAP(i+1,N+2) := 1
-            end-do
-
-            writeln("DIR_CAP: ")
-            print_matrix_real(DIR_CAP, false)
-        end-procedure
-
         procedure discover_cycle_from(s: integer)
             ! Build the path from the source
             if (s in visited) then
@@ -197,7 +153,7 @@ model "MST"
             else
                 visited += {s}
                 forall (i in NODES | i>s) do
-                    if (getsol(x(s,i)) = 1) then
+                    if (getsol(x(s,i))>0) then
                         discover_cycle_from(i)
                     end-if
                 end-do
@@ -208,12 +164,12 @@ model "MST"
             ! Check if there is a path from s to d
 
             returned := false
-            if (s=d or getsol(x(s,d))=1 or getsol(x(d,s))=1) then
+            if (s=d or getsol(x(s,d))>0 or getsol(x(d,s))>0) then
                 visited += {s,d}
                 returned := true
             else
                 visited += {s}
-                forall (i in (NODES-visited) | getsol(x(s,i))=1 or getsol(x(i,s))=1) do
+                forall (i in (NODES-visited) | getsol(x(s,i))>0 or getsol(x(i,s))>0) do
                     if (exists_path(i,d)) then
                         returned := true
                         visited += {d}
@@ -278,15 +234,28 @@ model "MST"
 
         ! Simmetry assigment for semplification
         forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+            create(x(j,i))
+            x(i,j) = x(j,i)
             GRAPH(j,i) := GRAPH(i,j)
             COSTS(j,i) := COSTS(i,j)
         end-do
 
+        !forall (i,j in NODES | i=j)
+        !    dist(i,j) = 0
+
+        !forall (i,j in NODES | i<j) do
+        !    dist(i,j) = x(i,j)*COSTS(i,j) + (1-x(i,j))*(sum(k,l in NODES-{i,j}) (COSTS(i,k)+COSTS(l,j)+dist(k,l))*x(i,k)*x(l,j))
+        !end-do
+
         ! Objective
         tree_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) COSTS(i,j) * x(i,j)
-        route_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) path_cost(i,j)  ! TODO: refactor using raw mpvar
+        route_cost := sum(i,j in NODES | i<j) dist(i,j)
 
         objective := tree_cost
+
+        !route_cost :=   sum(p,q in NODES | p<q) ((sum(j in NODES-{p})     COSTS(p,j) * x(p,j)) +
+        !                                         (sum(i in NODES-{p,q})   COSTS(i,q) * x(i,q)) +
+        !                                         (sum(i,j in NODES-{p,q})       COSTS(i,j) * x(i,j)))
 
         iter := 0
         violation_counter := 0
@@ -295,8 +264,14 @@ model "MST"
             iter := iter + 1
 
             minimize(XPRS_LIN, objective)
-
             print_sol(false)
+
+            writeln("distance matrix:")
+            !build_dist_matrix
+            !print_matrix_real(dist, true)
+
+            print_matrix_mpvar(dist, true)
+
 
             ! Search for cycles
             forall (i in NODES) do
@@ -326,3 +301,79 @@ model "MST"
         print_sol(true)
 
 end-model
+
+
+(!
+        1
+      / |
+    2   |   4
+        | /
+        3 -- 5
+
+    pc(2,3) =
+                c(2,3) * x(2,3) +
+
+                c(2,1) * x(2,1) +
+                c(1,3) * x(1,3) +
+
+                c(2,4) * x(2,4) +
+                c(4,3) * x(4,3) +
+
+                c(2,5) * x(2,5) +
+
+                c(1,4) * x(1,4) +
+                c(1,5) * x(1,5) +
+                c(4,5) * x(4,5) +
+
+            =
+                c(2,1) * x(2,1) +
+                c(2,3) * x(2,3) + 0
+                c(2,4) * x(2,4) + 0
+                c(2,5) * x(2,5) + 0
+
+                c(1,3) * x(1,3) +
+                c(4,3) * x(4,3) +
+
+                c(1,4) * x(1,4) + 0
+                c(1,5) * x(1,5) + 0
+                c(4,5) * x(4,5) + 0
+
+            =
+                sum(j in NODES | j<>2) c(2,j) * x(2,j) +
+                sum(i in NODES | i<>2 and i<>3) c(i,3) * x(i,3) +
+                sum(i,j in NODES-{2,3} | i<j) c(i,j) * x(i,j)
+
+    pc(1,5) =
+                c(1,5) * x(1,5) +
+
+                c(1,2) * x(1,2) +
+                c(2,5) * x(2,5) +
+
+                c(1,3) * x(1,3) +
+                c(3,5) * x(3,5) +
+
+                c(1,4) * x(1,4) +
+                c(4,5) * x(4,5) +
+
+                c(2,3) * x(2,3) +
+
+                c(2,4) * x(2,4) +
+
+                c(3,4) * x(3,4) +
+
+
+            =
+                c(1,2) * x(1,2) +
+                c(1,3) * x(1,3) +
+                c(1,4) * x(1,4) +
+                c(1,5) * x(1,5) +
+
+                c(2,3) * x(2,3) +
+                c(2,4) * x(2,4) +
+                c(2,5) * x(2,5) +
+
+                c(3,4) * x(3,4) +
+                c(3,5) * x(3,5) +
+
+                c(4,5) * x(4,5) +
+!)
