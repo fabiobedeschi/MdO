@@ -236,6 +236,33 @@ model "MST"
             end-if
         end-function
 
+        procedure print_sol(final: boolean)
+            writeln
+            if (final) then
+                writeln("-"*60, " ", "Final")
+            else
+                writeln("-"*60, " ", "Iter ", iter)
+            end-if
+            writeln("SELECTED EDGES: ")
+            print_matrix_mpvar(x, true)
+
+            tree_cost_cumulative := 0.0
+            forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+                tree_cost_cumulative := tree_cost_cumulative + COSTS(i,j) * getsol(x(i,j))
+            end-do
+
+            route_cost_cumulative := 0.0
+            forall (i,j in NODES | i<j) do
+                visited := {}
+                route_cost_cumulative += path_cost(i,j)
+            end-do
+
+            writeln("TREE COST:\t", tree_cost_cumulative)
+            writeln("ROUTE COST:\t", route_cost_cumulative)
+            writeln("Objective: ", getobjval)
+            writeln
+        end-procedure
+
     ! --------------------------------------------------------------------------------
     ! MODEL --------------------------------------------------------------------------
     ! --------------------------------------------------------------------------------
@@ -257,43 +284,19 @@ model "MST"
 
         ! Objective
         tree_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) COSTS(i,j) * x(i,j)
-        route_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) path_cost(i,j)
+        route_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) path_cost(i,j)  ! TODO: refactor using raw mpvar
+
+        objective := tree_cost
 
         iter := 0
-        writeln
-        writeln("-"*60, " ", "Iter ", iter)
-        writeln("SELECTED EDGES: ")
-        print_matrix_mpvar(x, true)
-        writeln("TREE COST: ", getobjval)
-        writeln
-
         violation_counter := 0
         repeat
             violation := false
             iter := iter + 1
 
-            minimize(XPRS_LIN, tree_cost)
+            minimize(XPRS_LIN, objective)
 
-            writeln
-            writeln("-"*60, " ", "Iter ", iter)
-            writeln("SELECTED EDGES: ")
-            print_matrix_mpvar(x, true)
-
-            tree_cost_cumulative := 0.0
-            forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
-                tree_cost_cumulative := tree_cost_cumulative + COSTS(i,j) * getsol(x(i,j))
-            end-do
-
-            route_cost_cumulative := 0.0
-            forall (i,j in NODES | i<j) do
-                visited := {}
-                route_cost_cumulative += path_cost(i,j)
-            end-do
-
-            writeln("TREE COST:\t", tree_cost_cumulative)
-            writeln("ROUTE COST:\t", route_cost_cumulative)
-            writeln("Objective: ", getobjval)
-            writeln
+            print_sol(false)
 
             ! Search for cycles
             forall (i in NODES) do
@@ -319,5 +322,7 @@ model "MST"
 
         until (not(violation))
 
+        minimize(objective)
+        print_sol(true)
 
 end-model
