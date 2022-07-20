@@ -42,6 +42,7 @@ model "MST"
         declarations
             x: dynamic array(NODES,NODES) of mpvar      ! selected edges variable (1 if edge is selected, 0 otherwise)
             tree_cost: linctr                           ! cost of the tree
+            route_cost: linctr                          ! cost of the routing tree
 
             iter: integer                               ! iterator counter
             violation: boolean                          ! found violation of a constraint
@@ -189,19 +190,51 @@ model "MST"
             print_matrix_real(DIR_CAP, false)
         end-procedure
 
-        procedure build_path_from(node: integer)
-            ! Build the path from the node
-            if (node in visited) then
+        procedure discover_cycle_from(s: integer)
+            ! Build the path from the source
+            if (s in visited) then
                 violation := true
             else
-                visited += {node}
-                forall (i in NODES | i>node) do
-                    if (getsol(x(node,i)) > 0) then
-                        build_path_from(i)
+                visited += {s}
+                forall (i in NODES | i>s) do
+                    if (getsol(x(s,i)) = 1) then
+                        discover_cycle_from(i)
                     end-if
                 end-do
             end-if
         end-procedure
+
+        function exists_path(s,d: integer): boolean
+            ! Check if there is a path from s to d
+
+            returned := false
+            if (s=d or getsol(x(s,d))=1 or getsol(x(d,s))=1) then
+                visited += {s,d}
+                returned := true
+            else
+                visited += {s}
+                forall (i in (NODES-visited) | getsol(x(s,i))=1 or getsol(x(i,s))=1) do
+                    if (exists_path(i,d)) then
+                        returned := true
+                        visited += {d}
+                    else
+                        visited -= {i}
+                    end-if
+                end-do
+            end-if
+        end-function
+
+        function path_cost(s,d: integer): real
+            ! Get the path cost from the source to the destinantion nodes
+            if (s = d) then
+                returned := 0
+            else
+                visited := {}
+                if (exists_path(s,d)) then
+                    returned := sum(n in 1..(getsize(visited)-1)) COSTS(visited(n), visited(n+1))
+                end-if
+            end-if
+        end-function
 
     ! --------------------------------------------------------------------------------
     ! MODEL --------------------------------------------------------------------------
@@ -216,24 +249,50 @@ model "MST"
         ! Cardinality
         sum (i,j in NODES | i<j and GRAPH(i,j)=1) x(i,j) = N-1
 
+        ! Simmetry assigment for semplification
+        forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+            GRAPH(j,i) := GRAPH(i,j)
+            COSTS(j,i) := COSTS(i,j)
+        end-do
+
         ! Objective
         tree_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) COSTS(i,j) * x(i,j)
+        route_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) path_cost(i,j)
 
-        ! TODO: modify the objective to solve the given problem not just the MST
         iter := 0
+        writeln
+        writeln("-"*60, " ", "Iter ", iter)
+        writeln("SELECTED EDGES: ")
+        print_matrix_mpvar(x, true)
+        writeln("TREE COST: ", getobjval)
+        writeln
+
         violation_counter := 0
         repeat
             violation := false
             iter := iter + 1
 
             minimize(XPRS_LIN, tree_cost)
-            !minimize(tree_cost)
 
             writeln
-            writeln("-"*80, " ", "Iter ", iter)
+            writeln("-"*60, " ", "Iter ", iter)
             writeln("SELECTED EDGES: ")
             print_matrix_mpvar(x, true)
-            writeln("TREE COST: ", getobjval)
+
+            tree_cost_cumulative := 0.0
+            forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
+                tree_cost_cumulative := tree_cost_cumulative + COSTS(i,j) * getsol(x(i,j))
+            end-do
+
+            route_cost_cumulative := 0.0
+            forall (i,j in NODES | i<j) do
+                visited := {}
+                route_cost_cumulative += path_cost(i,j)
+            end-do
+
+            writeln("TREE COST:\t", tree_cost_cumulative)
+            writeln("ROUTE COST:\t", route_cost_cumulative)
+            writeln("Objective: ", getobjval)
             writeln
 
             ! Search for cycles
@@ -241,11 +300,11 @@ model "MST"
                 visited := {}
 
                 ! Build the path from the node and set "violation" if a cycle is found
-                build_path_from(i)
+                discover_cycle_from(i)
 
                 if (violation) then
                     violation_counter := violation_counter + 1
-                    writeln("Violation detected! This set is a cycle: ", visited)
+                    writeln("Violation detected! This set contains a cycle: ", visited)
                     writeln("Violation counter: ", violation_counter)
 
                     ! Remove the cycle with new constraint
