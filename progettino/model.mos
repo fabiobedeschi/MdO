@@ -1,11 +1,3 @@
-(!
-Routing cost spanning tree: dato un grafo non orientato e pesato,
-trovare l’albero di copertura che minimizza la somma del costo dei cammini tra ogni coppia di nodi.
-Per 3 persone: ogni coppia di nodi i e j deve spedirsi una domanda d_ij
-utilizzando l’unico cammino che collega i e j sull’albero.
-Si vuole minimizzare la somma su tutte le coppie di nodi dei costi di spedizione.
-!)
-
 model "MST"
 
     uses "mmxprs", "mmsystem"
@@ -14,54 +6,51 @@ model "MST"
     setparam("XPRS_CUTSTRATEGY", 0)
     setparam("XPRS_VERBOSE", 0)
 
-    ! --------------------------------------------------------------------------------
-    ! DATA READING -------------------------------------------------------------------
-    ! --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    # DATA READING -------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
         declarations
-            file_path = "graph_7.dat"
-            N: integer                              ! number of nodes
+            file_path = "graph_9.dat"
+            N: integer                              # number of nodes
         end-declarations
         initialisations from file_path
             N
         end-initialisations
         declarations
-            NODES = 1..N                               ! nodes
-            GRAPH: array(NODES,NODES) of integer       ! matrix of edges in the graph (undirected, 0 if no edge, 1 if edge exists)
-            COSTS: array(NODES,NODES) of real          ! matrix of costs of the edges
+            NODES = 1..N                               # nodes
+            GRAPH: array(NODES,NODES) of integer       # matrix of edges in the graph (undirected, 0 if no edge, 1 if edge exists)
+            COSTS: array(NODES,NODES) of real          # matrix of costs of the edges
         end-declarations
         initialisations from file_path
             GRAPH
             COSTS
         end-initialisations
 
-    ! --------------------------------------------------------------------------------
-    ! DECLARATIONS -------------------------------------------------------------------
-    ! --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    # DECLARATIONS -------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
         declarations
-            x: dynamic array(NODES,NODES) of mpvar      ! selected edges variable (1 if edge is selected, 0 otherwise)
-            tree_cost: linctr                           ! cost of the tree
-            route_cost: linctr                          ! cost of the routing tree
+            x: dynamic array(NODES,NODES) of mpvar      # selected edges variable (1 if edge is selected, 0 otherwise)
+            tree_cost: linctr                           # cost of the tree
+            route_cost: linctr                          # cost of the routing tree
 
-            iter: integer                               ! iterator counter
-            violation: boolean                          ! found violation of a constraint
-            violation_counter: integer                            ! counter for the number of violated constraints
-            violation_ctrs: dynamic array(range) of linctr    ! violated constraints
+            iter: integer                               # iterator counter
+            violation: boolean                          # found violation of a constraint
+            violation_counter: integer                            # counter for the number of violated constraints
+            violation_ctrs: dynamic array(range) of linctr    # violated constraints
 
-            visited: set of integer                    ! set of visited nodes while searching for cycles
-
-            dist: array(NODES,NODES) of mpvar          ! matrix of distances between nodes
-            !dist: array(NODES,NODES) of real         ! matrix of distances between nodes (real)
+            visited: set of integer                    # set of visited nodes while searching for cycles
 
         end-declarations
 
-    ! --------------------------------------------------------------------------------
-    ! PROCEDURES & FUNCTIONS ---------------------------------------------------------
-    ! --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    # PROCEDURES & FUNCTIONS ---------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
         procedure print_matrix_integer(m: array(r: range, range) of integer, upper_only: boolean)
-            ! Header
+            # Header
             write("   | ")
             forall (i in r)
                 write(strfmt(i, 4), " ")
@@ -74,7 +63,6 @@ model "MST"
 
                     if ((i>=j or m(i,j)=0) and upper_only) then
                         write(" ·")
-                        !write(" ")
                     else
                         write(strfmt(m(i,j), 4))
                     end-if
@@ -90,7 +78,7 @@ model "MST"
         end-procedure
 
         procedure print_matrix_real(m: array(r: range, range) of real, upper_only: boolean)
-            ! Header
+            # Header
             write("   | ")
             forall (i in r)
                 write(strfmt(i, 4), " ")
@@ -118,7 +106,7 @@ model "MST"
         end-procedure
 
         procedure print_matrix_mpvar(m: array(r:range, range) of mpvar, upper_only: boolean)
-            ! Header
+            # Header
             write("   | ")
             forall (i in r)
                 write(strfmt(i, 2), " ")
@@ -129,9 +117,8 @@ model "MST"
                 write(strfmt(i, 2), " | ")
                 forall (j in r) do
 
-                    if ((i>=j or abs(getsol(m(i,j)))=0) and upper_only) then
+                    if ( (i>=j or abs(getsol(m(i,j)))=0) and upper_only) then
                         write(" ·")
-                        !write(" ")
                     else
                         write(strfmt(abs(getsol(m(i,j))), 2))
                     end-if
@@ -147,7 +134,7 @@ model "MST"
         end-procedure
 
         procedure discover_cycle_from(s: integer)
-            ! Build the path from the source
+            # Build the path from the source
             if (s in visited) then
                 violation := true
             else
@@ -161,8 +148,7 @@ model "MST"
         end-procedure
 
         function exists_path(s,d: integer): boolean
-            ! Check if there is a path from s to d
-
+            # Check if there is a path from s to d
             returned := false
             if (s=d or getsol(x(s,d))>0 or getsol(x(d,s))>0) then
                 visited += {s,d}
@@ -181,7 +167,7 @@ model "MST"
         end-function
 
         function path_cost(s,d: integer): real
-            ! Get the path cost from the source to the destinantion nodes
+            # Get the path cost from the source to the destinantion nodes
             if (s = d) then
                 returned := 0
             else
@@ -219,20 +205,20 @@ model "MST"
             writeln
         end-procedure
 
-    ! --------------------------------------------------------------------------------
-    ! MODEL --------------------------------------------------------------------------
-    ! --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    # MODEL --------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
-        ! Integrity
+        # Integrity
         forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
             create(x(i,j))
             x(i,j) is_binary
         end-do
 
-        ! Cardinality
+        # Cardinality
         sum (i,j in NODES | i<j and GRAPH(i,j)=1) x(i,j) = N-1
 
-        ! Simmetry assigment for semplification
+        # Simmetry assigment for semplification
         forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
             create(x(j,i))
             x(i,j) = x(j,i)
@@ -240,22 +226,10 @@ model "MST"
             COSTS(j,i) := COSTS(i,j)
         end-do
 
-        !forall (i,j in NODES | i=j)
-        !    dist(i,j) = 0
-
-        !forall (i,j in NODES | i<j) do
-        !    dist(i,j) = x(i,j)*COSTS(i,j) + (1-x(i,j))*(sum(k,l in NODES-{i,j}) (COSTS(i,k)+COSTS(l,j)+dist(k,l))*x(i,k)*x(l,j))
-        !end-do
-
-        ! Objective
+        # Objective
         tree_cost := sum(i,j in NODES | i<j and GRAPH(i,j)=1) COSTS(i,j) * x(i,j)
-        route_cost := sum(i,j in NODES | i<j) dist(i,j)
 
         objective := tree_cost
-
-        !route_cost :=   sum(p,q in NODES | p<q) ((sum(j in NODES-{p})     COSTS(p,j) * x(p,j)) +
-        !                                         (sum(i in NODES-{p,q})   COSTS(i,q) * x(i,q)) +
-        !                                         (sum(i,j in NODES-{p,q})       COSTS(i,j) * x(i,j)))
 
         iter := 0
         violation_counter := 0
@@ -266,30 +240,23 @@ model "MST"
             minimize(XPRS_LIN, objective)
             print_sol(false)
 
-            writeln("distance matrix:")
-            !build_dist_matrix
-            !print_matrix_real(dist, true)
-
-            print_matrix_mpvar(dist, true)
-
-
-            ! Search for cycles
+            # Search for cycles
             forall (i in NODES) do
                 visited := {}
 
-                ! Build the path from the node and set "violation" if a cycle is found
+                # Build the path from the node and set "violation" if a cycle is found
                 discover_cycle_from(i)
 
                 if (violation) then
                     violation_counter := violation_counter + 1
-                    writeln("Violation detected! This set contains a cycle: ", visited)
+                    writeln("Violation detected# This set contains a cycle: ", visited)
                     writeln("Violation counter: ", violation_counter)
 
-                    ! Remove the cycle with new constraint
+                    # Remove the cycle with new constraint
                     create(violation_ctrs(violation_counter))
                     violation_ctrs(violation_counter) := sum(p,q in visited | p<q) x(p,q) <= getsize(visited)-1
 
-                    ! Restart the search
+                    # Restart the search
                     break
 
                 end-if

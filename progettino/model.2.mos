@@ -5,7 +5,7 @@
 # Si vuole minimizzare la somma su tutte le coppie di nodi dei costi di spedizione.
 
 
-model "MST"
+model "MRCT"
 
     uses "mmxprs", "mmsystem"
 
@@ -18,7 +18,7 @@ model "MST"
     # --------------------------------------------------------------------------------
 
         declarations
-            file_path = "graph_9.dat"
+            file_path = "graph_10.dat"
             N: integer                              # number of nodes
         end-declarations
         initialisations from file_path
@@ -136,7 +136,7 @@ model "MST"
 
         iter := 0
         v_cnt := 0
-        MAX_ITER := 10000
+        MAX_ITER := 1000
         repeat
             violation := false
             iter := iter + 1
