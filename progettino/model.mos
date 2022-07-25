@@ -11,7 +11,7 @@ model "MST"
     # --------------------------------------------------------------------------------
 
         declarations
-            file_path = "graph_9.dat"
+            file_path = "graph_2.dat"
             N: integer                              # number of nodes
         end-declarations
         initialisations from file_path

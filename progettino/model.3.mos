@@ -5,7 +5,7 @@
 # Si vuole minimizzare la somma su tutte le coppie di nodi dei costi di spedizione.
 
 
-model "MST"
+model "MRCT"
 
     uses "mmxprs", "mmsystem"
 
@@ -57,9 +57,11 @@ model "MST"
             iter: integer                                       # iterator counter
             violation: boolean                                  # found violation of a constraint
             v_cnt: integer                                      # counter for the number of violated constraints
-            v_ctrs: dynamic array(range) of linctr              # violated constraints
 
             cost_function: linctr
+
+            single_path_ctr: array(NODES,NODES) of linctr                   # constraint for each pair of nodes
+            only_tree_edges_ctr: array(NODES,NODES,NODES,NODES) of linctr   # constraint for each pair of nodes and each pair of paths
 
         end-declarations
 
@@ -83,56 +85,92 @@ model "MST"
         forall (i,j in NODES | i<j and GRAPH(i,j)=1) do
             create(x(i,j))
             x(i,j) is_binary
+            x(i,j) >= 0
+            x(i,j) <= 1
 
             create(x(j,i))
             x(j,i) is_binary
-
+            x(j,i) >= 0
+            x(j,i) <= 1
             x(j,i) = x(i,j)
         end-do
+
 
         # Select exactly N-1 edges to form a tree
         sum (i,j in NODES | i<j and GRAPH(i,j)=1) x(i,j) = N-1
 
+
         # Compute all possible paths with their cost and instantiate a decision variable for each one
-        forall (i,j in NODES | i<j) do
-            forall(cnt as counter, path in search_all_paths(i,j)) do
-                create(y(i,j,cnt))
-                y(i,j,cnt) is_binary  # TODO: is this needed?
+        procedure discover_new_path(i,j: integer)
+            "NewPathLoop": forall(cnt as counter, path in search_all_paths(i,j)) do
+                if not(exists(y(i,j,cnt))) then
 
-                create(PATHS(i,j,cnt))
-                PATHS(i,j,cnt) := path
+                    create(y(i,j,cnt))
+                    y(i,j,cnt) is_binary
+                    y(i,j,cnt) >= 0
+                    y(i,j,cnt) <= 1
 
-                create(DISTS(i,j,cnt))
-                DISTS(i,j,cnt) := sum(edge in path) COSTS(edge(1), edge(2))
+                    create(PATHS(i,j,cnt))
+                    PATHS(i,j,cnt) := path
+
+                    create(DISTS(i,j,cnt))
+                    DISTS(i,j,cnt) := sum(edge in path) COSTS(edge(1), edge(2))
+
+                    # Symmetry
+                    create(y(j,i,cnt))
+                    y(j,i,cnt) is_binary
+                    y(j,i,cnt) >= 0
+                    y(j,i,cnt) <= 1
+                    y(j,i,cnt) = y(i,j,cnt)
+
+                    create(PATHS(j,i,cnt))
+                    forall (edge in getreverse(PATHS(i,j,cnt)))
+                        PATHS(j,i,cnt) += [getreverse(edge)]
+
+                    create(DISTS(j,i,cnt))
+                    DISTS(j,i,cnt) := DISTS(i,j,cnt)
+
+
+                    # Instantiate a decision variable one at a time for columns generation
+                    break "NewPathLoop"
+                end-if
             end-do
-        end-do
+        end-procedure
 
-        # Simmetry of the paths matrix
-        forall (i,j in NODES, k in MP | i<j and exists(y(i,j,k))) do
-            create(y(j,i,k))
-            y(j,i,k) is_binary
-            y(j,i,k) = y(i,j,k)
+        procedure discover_new_paths
+            forall (i,j in NODES | i<j) do
+                discover_new_path(i,j)
+            end-do
+        end-procedure
 
-            create(PATHS(j,i,k))
-            forall (edge in getreverse(PATHS(i,j,k)))
-                PATHS(j,i,k) += [getreverse(edge)]
+        discover_new_paths
 
-            create(DISTS(j,i,k))
-            DISTS(j,i,k) := DISTS(i,j,k)
-        end-do
 
         # Exactly a single path between each pair of nodes
-        forall(i,j in NODES | i<j) do
-            sum(k in MP | exists(y(i,j,k))) y(i,j,k) = 1
-        end-do
+        procedure allow_single_path_between_each_pair_of_nodes
+            forall(i,j in NODES | i<j) do
+                single_path_ctr(i,j) := sum(k in MP | exists(y(i,j,k))) y(i,j,k) = 1
+            end-do
+        end-procedure
+
+        allow_single_path_between_each_pair_of_nodes
 
         # Paths can use only edges of a tree
-        # forall(i,j in NODES | i<j and GRAPH(i,j)=1)
-        #     forall(s,d in NODES | s<>d and not(s=i and d=j))
-        #         sum (k in MP | exists(y(s,d,k)) and edge_in_path([i,j], PATHS(s,d,k))) y(s,d,k) <= x(i,j)
+        procedure path_can_use_only_tree_edges
+            forall(i,j in NODES | i<j and GRAPH(i,j)=1)  # forall edges in the graph
+                forall(s,d in NODES | s<>d and not(s=i and d=j))  # forall paths using the edge (i,j)
+                    only_tree_edges_ctr(i,j,s,d) := sum (k in MP | exists(y(s,d,k)) and edge_in_path([i,j], PATHS(s,d,k))) y(s,d,k) <= x(i,j)
+        end-procedure
 
-        # cost_function := sum(i,j in NODES | i<j) (sum(k in MP | exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k))
-        cost_function := sum(i,j in NODES, k in MP | i<j and exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k)
+        path_can_use_only_tree_edges
+
+        # Definition of the cost function as the sum of all selected paths costs
+        procedure define_cost_function
+            cost_function := sum(i,j in NODES, k in MP | i<j and exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k)
+        end-procedure
+
+        define_cost_function
+
 
         iter := 0
         v_cnt := 0
@@ -142,23 +180,33 @@ model "MST"
             iter := iter + 1
 
             minimize(XPRS_LIN, cost_function)
-            # minimize(cost_function)
             print_sol(false)
 
             # Dynamic constraint to allow only paths that use edges of the tree (this should avoid cycles too)
-            "SearchViolationLoop": forall(i,j in NODES | i<j and GRAPH(i,j)=1 and getsol(x(i,j))<1)
-                forall(s,d in NODES | s<>d and not(s=i and d=j))
+            "SearchViolationLoop": forall(i,j in NODES | i<j and GRAPH(i,j)=1 and getsol(x(i,j))<1) do
+                forall(s,d in NODES | s<d and not(s=i and d=j))
                     forall (k in MP | exists(y(s,d,k)) and getsol(y(s,d,k))>0 and edge_in_path([i,j], PATHS(s,d,k))) do
                         # Found a violation
                         violation := true
                         v_cnt := v_cnt + 1
                         writeln("Violation ", v_cnt, "! Selected path ", pretty_path(PATHS(s,d,k)), " contains edge ", [i,j], " which is NOT in the tree")
 
-                        forall(ss,dd in NODES | ss<>dd and not(ss=i and dd=j))
-                            sum (kk in MP | exists(y(ss,dd,kk)) and edge_in_path([i,j], PATHS(ss,dd,kk))) y(ss,dd,kk) <= x(i,j)
+                        # Discover new paths
+                        discover_new_paths
 
-                        break "SearchViolationLoop"
+                        # Re-apply the constraint to the new paths
+                        allow_single_path_between_each_pair_of_nodes
+                        path_can_use_only_tree_edges
+
+                        # Re-define the cost function
+                        define_cost_function
+
                     end-do
+                    # Re-solve the problem
+                    if violation then
+                        break "SearchViolationLoop"
+                    end-if
+                end-do
 
 
         until (not(violation) or iter>=MAX_ITER)
@@ -234,7 +282,7 @@ model "MST"
             writeln("SELECTED PATHS: ")
             forall(i,j in NODES | i<j) do
                 forall(k in MP | getsol(y(i,j,k))>0) do
-                    writeln(i," -> ",j, "\tC:", DISTS(i,j,k), "\tP: ", pretty_path(PATHS(i,j,k)), "\ty:", getsol(y(i,j,k)))
+                    writeln(i," -> ",j, "\tC:", DISTS(i,j,k), "\tP: ", pretty_path(PATHS(i,j,k)), "\ty(",i,",",j,",",k,") = ", getsol(y(i,j,k)))
                 end-do
             end-do
             writeln
@@ -349,19 +397,19 @@ model "MST"
             # Header
             write("    | ")
             forall (i in r)
-                write(strfmt(i, 3), " ")
+                write(strfmt(i, 4), " ")
             writeln
-            writeln("-"*(5*getsize(r)+4))
+            writeln("-"*(5*getsize(r)+5))
 
             forall (i in r) do
                 write(strfmt(i, 3), " | ")
                 forall (j in r) do
 
                     if ( (i>=j or getsol(m(i,j))=0) and upper_only) then
-                        write("  ·")
+                        write("   ·")
                         #write(" ")
                     else
-                        write(strfmt(getsol(m(i,j)), 3))
+                        write(strfmt(getsol(m(i,j)), 4))
                     end-if
 
                     if (j < getsize(r)) then
