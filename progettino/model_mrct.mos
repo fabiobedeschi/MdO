@@ -18,7 +18,7 @@ model "MST"
     # --------------------------------------------------------------------------------
 
         declarations
-            file_path = "graph_2.dat"
+            file_path = "graph_3.dat"
             N: integer                              # number of nodes
         end-declarations
         initialisations from file_path
@@ -57,7 +57,7 @@ model "MST"
             iter: integer                                       # iterator counter
             violation: boolean                                  # found violation of a constraint
             v_cnt: integer                                      # counter for the number of violated constraints
-            v_ctrs: dynamic array(range) of linctr              # violated constraints
+            v_ctrs: dynamic array(NODES,NODES,NODES,NODES) of linctr              # violated constraints
 
             cost_function: linctr
 
@@ -97,7 +97,7 @@ model "MST"
         forall (i,j in NODES | i<j) do
             forall(cnt as counter, path in search_all_paths(i,j)) do
                 create(y(i,j,cnt))
-                y(i,j,cnt) is_binary  # TODO: is this needed?
+                y(i,j,cnt) is_binary
 
                 create(PATHS(i,j,cnt))
                 PATHS(i,j,cnt) := path
@@ -131,7 +131,6 @@ model "MST"
         #     forall(s,d in NODES | s<>d and not(s=i and d=j))
         #         sum (k in MP | exists(y(s,d,k)) and edge_in_path([i,j], PATHS(s,d,k))) y(s,d,k) <= x(i,j)
 
-        # cost_function := sum(i,j in NODES | i<j) (sum(k in MP | exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k))
         cost_function := sum(i,j in NODES, k in MP | i<j and exists(y(i,j,k))) y(i,j,k)*DISTS(i,j,k)
 
         iter := 0
@@ -142,7 +141,6 @@ model "MST"
             iter := iter + 1
 
             minimize(XPRS_LIN, cost_function)
-            # minimize(cost_function)
             print_sol(false)
 
             # Dynamic constraint to allow only paths that use edges of the tree (this should avoid cycles too)
@@ -155,9 +153,9 @@ model "MST"
                         writeln("Violation ", v_cnt, "! Selected path ", pretty_path(PATHS(s,d,k)), " contains edge ", [i,j], " which is NOT in the tree")
 
                         forall(ss,dd in NODES | ss<>dd and not(ss=i and dd=j))
-                            sum (kk in MP | exists(y(ss,dd,kk)) and edge_in_path([i,j], PATHS(ss,dd,kk))) y(ss,dd,kk) <= x(i,j)
+                            v_ctrs(ss,dd,i,j) := sum (kk in MP | exists(y(ss,dd,kk)) and edge_in_path([i,j], PATHS(ss,dd,kk))) y(ss,dd,kk) <= x(i,j)
 
-                        break "SearchViolationLoop"
+                        # break "SearchViolationLoop"
                     end-do
 
 
