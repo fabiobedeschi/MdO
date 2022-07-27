@@ -5,7 +5,7 @@
 # Si vuole minimizzare la somma su tutte le coppie di nodi dei costi di spedizione.
 
 
-model "MST"
+model "MRCT"
 
     uses "mmxprs", "mmsystem"
 
@@ -18,7 +18,7 @@ model "MST"
     # --------------------------------------------------------------------------------
 
         declarations
-            file_path = "graph_3.dat"
+            file_path = "graph_2.dat"
             N: integer                              # number of nodes
         end-declarations
         initialisations from file_path
@@ -152,7 +152,7 @@ model "MST"
                         v_cnt := v_cnt + 1
                         writeln("Violation ", v_cnt, "! Selected path ", pretty_path(PATHS(s,d,k)), " contains edge ", [i,j], " which is NOT in the tree")
 
-                        forall(ss,dd in NODES | ss<>dd and not(ss=i and dd=j))
+                        forall(ss,dd in NODES | ss<>dd )
                             v_ctrs(ss,dd,i,j) := sum (kk in MP | exists(y(ss,dd,kk)) and edge_in_path([i,j], PATHS(ss,dd,kk))) y(ss,dd,kk) <= x(i,j)
 
                         # break "SearchViolationLoop"
